@@ -16,7 +16,7 @@ import (
 func main() {
 	go receive()
 	time.Sleep(time.Second)
-	go send()
+	go send("127.0.0.1", []byte("wuffwuff"))
 	time.Sleep(10 * time.Second)
 }
 
@@ -68,7 +68,7 @@ func receive2() {
 	}
 }
 
-func send() {
+func send(dstAddr string, payload []byte) {
 	var err error
 	fd, _ := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_IPV4)
 	log.Printf("fd: %d\n", fd)
@@ -76,7 +76,11 @@ func send() {
 		Port: 0,
 		Addr: [4]byte{127, 0, 0, 1},
 	}
-	p := preparePacket()
+	p, err := preparePacket(payload, "127.0.0.1", dstAddr)
+	if err != nil {
+		panic(err.Error())
+	}
+
 	err = syscall.Sendto(fd, p, 0, &addr)
 	if err != nil {
 		log.Fatal("Sendto: ", err)
@@ -124,27 +128,25 @@ func debugPacket(buf []byte, numRead int, ctx string) {
 	}
 }
 
-func preparePacket() []byte {
+func preparePacket(payload []byte, srcAddr, dstAddr string) ([]byte, error) {
 	var srcIP, dstIP net.IP
-	var srcPstr string = "127.0.0.1"
-	var dstPstr string = "127.0.0.1"
 
-	srcIP = net.ParseIP(srcPstr)
+	srcIP = net.ParseIP(srcAddr)
 	if srcIP == nil {
-		panic("non ip source address")
+		return nil, fmt.Errorf("non ip source address")
 	}
 	srcIP = srcIP.To4()
 	if srcIP == nil {
-		panic("non ipv4 source address")
+		return nil, fmt.Errorf("non ipv4 source address")
 	}
 
-	dstIP = net.ParseIP(dstPstr)
+	dstIP = net.ParseIP(dstAddr)
 	if dstIP == nil {
-		panic("non ip destination address")
+		return nil, fmt.Errorf("non ip destination address")
 	}
 	dstIP = dstIP.To4()
 	if dstIP == nil {
-		panic("non ipv4 destination address")
+		return nil, fmt.Errorf("non ipv4 destination address")
 	}
 
 	localRand := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -195,13 +197,19 @@ func preparePacket() []byte {
 	}
 
 	if err := tcpLayer.SetNetworkLayerForChecksum(&ipLayer); err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to set network layer for checksum: %w", err)
 	}
 
 	buf := gopacket.NewSerializeBuffer()
-	payload := gopacket.Payload("wuffwuff")
-	if err := gopacket.SerializeLayers(buf, opts, &ipLayer, &tcpLayer, payload); err != nil {
-		log.Fatal(err)
+	if err := gopacket.SerializeLayers(
+		buf,
+		opts,
+		&ipLayer,
+		&tcpLayer,
+		gopacket.Payload(payload),
+	); err != nil {
+		return nil, fmt.Errorf("failed to serialize layers: %w", err)
 	}
-	return buf.Bytes()
+
+	return buf.Bytes(), nil
 }
